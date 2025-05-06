@@ -21,14 +21,16 @@ type IUserRepository interface {
 }
 
 type UserRepository struct {
-	base *GenericBaseRepository[models.User]
+	base Repository[models.User]
 }
 
 func NewUserRepository() IUserRepository {
+	base := NewBaseRepository[models.User](configsdatabase.GetDB())
+	base.SetAllowedSortColumns([]string{"id", "name", "account", "created_at", "status", "type"})
+
 	repo := &UserRepository{
-		base: NewBaseRepository[models.User](configsdatabase.GetDB()),
+		base: base,
 	}
-	repo.base.SetAllowedSortColumns([]string{"id", "name", "account", "created_at", "status", "type"})
 	return repo
 }
 
