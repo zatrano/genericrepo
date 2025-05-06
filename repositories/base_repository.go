@@ -5,8 +5,8 @@ import (
 	"errors"
 	"strings"
 
-	"davet.link/pkg/queryparams"
-	"davet.link/pkg/turkishsearch"
+	"zatrano/pkg/queryparams"
+	"zatrano/pkg/turkishsearch"
 
 	"gorm.io/gorm"
 )
