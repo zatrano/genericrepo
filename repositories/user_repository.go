@@ -3,9 +3,9 @@ package repositories
 import (
 	"context"
 
-	"davet.link/configs/configsdatabase"
-	"davet.link/models"
-	"davet.link/pkg/queryparams"
+	"zatrano/configs/configsdatabase"
+	"zatrano/models"
+	"zatrano/pkg/queryparams"
 )
 
 type IUserRepository interface {
