@@ -1,9 +1,9 @@
 package services
 
 import (
-	"zatrano/configs/configslog"
-	"zatrano/models"
-	"zatrano/repositories"
+	"davet.link/configs/configslog"
+	"davet.link/models"
+	"davet.link/repositories"
 
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
@@ -44,103 +44,120 @@ func NewAuthService() IAuthService {
 	return &AuthService{repo: repositories.NewAuthRepository()}
 }
 
-func (s *AuthService) Authenticate(account, password string) (*models.User, error) {
+func (s *AuthService) logAuthSuccess(account string, userID uint) {
+	configslog.Log.Info("Kimlik doğrulama başarılı",
+		zap.String("account", account),
+		zap.Uint("user_id", userID),
+	)
+}
+
+func (s *AuthService) logDBError(action string, err error, fields ...zap.Field) {
+	fields = append(fields, zap.Error(err))
+	configslog.Log.Error(action+" hatası (DB)", fields...)
+}
+
+func (s *AuthService) logWarn(action string, fields ...zap.Field) {
+	configslog.Log.Warn(action+" başarısız", fields...)
+}
+
+func (s *AuthService) getUserByAccount(account string) (*models.User, error) {
 	user, err := s.repo.FindUserByAccount(account)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			configslog.Log.Warn("Kimlik doğrulama başarısız: Kullanıcı bulunamadı", zap.String("account", account))
-			return nil, ErrInvalidCredentials
+			s.logWarn("Kullanıcı bulunamadı", zap.String("account", account))
+			return nil, ErrUserNotFound
 		}
-		configslog.Log.Error("Kimlik doğrulama hatası (DB)",
-			zap.String("account", account),
-			zap.Error(err),
-		)
+		s.logDBError("Kullanıcı sorgulama", err, zap.String("account", account))
 		return nil, ErrAuthGeneric
+	}
+	return user, nil
+}
+
+func (s *AuthService) getUserByID(id uint) (*models.User, error) {
+	user, err := s.repo.FindUserByID(id)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			s.logWarn("Kullanıcı bulunamadı", zap.Uint("user_id", id))
+			return nil, ErrUserNotFound
+		}
+		s.logDBError("Kullanıcı sorgulama", err, zap.Uint("user_id", id))
+		return nil, ErrProfileGeneric
+	}
+	return user, nil
+}
+
+func (s *AuthService) comparePasswords(hashedPassword, plainPassword string) error {
+	return bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(plainPassword))
+}
+
+func (s *AuthService) hashPassword(password string) (string, error) {
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hashedPassword), nil
+}
+
+func (s *AuthService) Authenticate(account, password string) (*models.User, error) {
+	user, err := s.getUserByAccount(account)
+	if err != nil {
+		return nil, err
 	}
 
 	if !user.Status {
-		configslog.Log.Warn("Kimlik doğrulama başarısız: Kullanıcı aktif değil",
+		s.logWarn("Kullanıcı aktif değil",
 			zap.String("account", account),
 			zap.Uint("user_id", user.ID),
 		)
 		return nil, ErrUserInactive
 	}
 
-	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
-	if err != nil {
-		configslog.Log.Warn("Kimlik doğrulama başarısız: Geçersiz parola",
+	if err := s.comparePasswords(user.Password, password); err != nil {
+		s.logWarn("Geçersiz parola",
 			zap.String("account", account),
 			zap.Uint("user_id", user.ID),
 		)
 		return nil, ErrInvalidCredentials
 	}
 
-	configslog.Log.Info("Kimlik doğrulama başarılı",
-		zap.String("account", account),
-		zap.Uint("user_id", user.ID),
-	)
+	s.logAuthSuccess(account, user.ID)
 	return user, nil
 }
 
 func (s *AuthService) GetUserProfile(id uint) (*models.User, error) {
-	user, err := s.repo.FindUserByID(id)
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			configslog.Log.Warn("Profil alınamadı: Kullanıcı bulunamadı", zap.Uint("user_id", id))
-			return nil, ErrUserNotFound
-		}
-		configslog.Log.Error("Profil alma hatası (DB)",
-			zap.Uint("user_id", id),
-			zap.Error(err),
-		)
-		return nil, ErrProfileGeneric
-	}
-	return user, nil
+	return s.getUserByID(id)
 }
 
 func (s *AuthService) UpdatePassword(userID uint, currentPass, newPassword string) error {
-	user, err := s.repo.FindUserByID(userID)
+	user, err := s.getUserByID(userID)
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			configslog.Log.Warn("Parola güncelleme başarısız: Kullanıcı bulunamadı", zap.Uint("user_id", userID))
-			return ErrUserNotFound
-		}
-		configslog.Log.Error("Parola güncelleme hatası: Kullanıcı bulunurken DB hatası",
-			zap.Uint("user_id", userID),
-			zap.Error(err),
-		)
-		return ErrUpdatePasswordGeneric
+		return err
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(currentPass)); err != nil {
-		configslog.Log.Warn("Parola güncelleme başarısız: Mevcut parola hatalı", zap.Uint("user_id", userID))
+	if err := s.comparePasswords(user.Password, currentPass); err != nil {
+		s.logWarn("Mevcut parola hatalı", zap.Uint("user_id", userID))
 		return ErrCurrentPasswordIncorrect
 	}
 
 	if len(newPassword) < 6 {
-		configslog.Log.Warn("Parola güncelleme başarısız: Yeni parola çok kısa", zap.Uint("user_id", userID))
+		s.logWarn("Yeni parola çok kısa", zap.Uint("user_id", userID))
 		return ErrPasswordTooShort
 	}
+
 	if currentPass == newPassword {
-		configslog.Log.Warn("Parola güncelleme başarısız: Yeni parola eskiyle aynı", zap.Uint("user_id", userID))
+		s.logWarn("Yeni parola eskiyle aynı", zap.Uint("user_id", userID))
 		return ErrPasswordSameAsOld
 	}
 
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	hashedPassword, err := s.hashPassword(newPassword)
 	if err != nil {
-		configslog.Log.Error("Parola güncelleme hatası: Yeni parola hashlenemedi",
-			zap.Uint("user_id", userID),
-			zap.Error(err),
-		)
+		s.logDBError("Parola hashleme", err, zap.Uint("user_id", userID))
 		return ErrHashingFailed
 	}
 
-	user.Password = string(hashedPassword)
+	user.Password = hashedPassword
 	if err := s.repo.UpdateUser(user); err != nil {
-		configslog.Log.Error("Parola güncelleme hatası: Kullanıcı güncellenirken DB hatası",
-			zap.Uint("user_id", userID),
-			zap.Error(err),
-		)
+		s.logDBError("Kullanıcı güncelleme", err, zap.Uint("user_id", userID))
 		return ErrDatabaseUpdateFailed
 	}
 
